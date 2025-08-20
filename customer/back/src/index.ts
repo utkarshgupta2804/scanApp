@@ -216,6 +216,108 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
+//##################################################################################################################
+// Get customer points by username
+app.get('/api/customers/:username/points', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { username } = req.params;
+
+        const customer = await Customer.findOne({ username }).select('username points name');
+
+        if (!customer) {
+            res.status(404).json({
+                success: false,
+                message: 'Customer not found'
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                username: customer.username,
+                name: customer.name,
+                points: customer.points
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Error fetching customer points:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
+// Update customer points (bonus endpoint for points management)
+app.patch('/api/customers/:username/points', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { username } = req.params;
+        const { points, operation = 'set' } = req.body; // operation: 'set', 'add', 'subtract'
+
+        if (typeof points !== 'number') {
+            res.status(400).json({
+                success: false,
+                message: 'Points must be a number'
+            });
+            return;
+        }
+
+        const customer = await Customer.findOne({ username });
+
+        if (!customer) {
+            res.status(404).json({
+                success: false,
+                message: 'Customer not found'
+            });
+            return;
+        }
+
+        let newPoints: number;
+
+        switch (operation) {
+            case 'add':
+                newPoints = customer.points + points;
+                break;
+            case 'subtract':
+                newPoints = Math.max(0, customer.points - points); // Don't allow negative points
+                break;
+            case 'set':
+            default:
+                newPoints = Math.max(0, points);
+                break;
+        }
+
+        const updatedCustomer = await Customer.findOneAndUpdate(
+            { username },
+            { points: newPoints },
+            { new: true }
+        ).select('username name points');
+
+        res.status(200).json({
+            success: true,
+            message: `Customer points ${operation === 'set' ? 'updated' : operation === 'add' ? 'added' : 'subtracted'} successfully`,
+            data: {
+                username: updatedCustomer?.username,
+                name: updatedCustomer?.name,
+                previousPoints: customer.points,
+                currentPoints: updatedCustomer?.points,
+                operation
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Error updating customer points:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
 // Error handling middleware
 app.use((err: Error, req: Request, res: Response, next: any) => {
     console.error(err.stack);
