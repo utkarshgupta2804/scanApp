@@ -1,0 +1,7 @@
+/admin/back/node_modules
+/admin/back/.env
+/admin/back/yarn.lock
+/customer/back/node_modules
+/customer/back/.env
+/customer/back/yarn.lock
+
