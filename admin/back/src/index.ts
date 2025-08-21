@@ -5,9 +5,47 @@ import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import mongoose, { Document, Schema } from "mongoose";
 import dotenv from "dotenv";
-import { Scheme } from "./models/scheme";
+import { Scheme, IScheme } from "./models/scheme";
 import Customer from "./models/customer";
 import { QR } from "./models/qrs";
+import multer from "multer";
+import path from 'path';
+import fs from 'fs';
+
+// Configure multer for image uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadPath = 'uploads/schemes/';
+        // Create directory if it doesn't exist
+        if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+        }
+        cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+        // Generate unique filename with timestamp
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, `scheme-${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+});
+
+// File filter to accept only images
+const fileFilter = (req: any, file: any, cb: any) => {
+    if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image files are allowed!'), false);
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 20 * 1024 * 1024, // 20MB limit
+        files: 1 
+    }
+});
 
 // Load environment variables
 dotenv.config();
@@ -20,7 +58,11 @@ app.use(cookieParser());
 app.use(
     cors({
         credentials: true,
-        origin: process.env.CLIENT_URL || "http://localhost:3000",
+        origin: [
+            process.env.CLIENT_URL || "http://localhost:3000",
+        ],
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     })
 );
 
@@ -47,13 +89,12 @@ interface JWTPayload {
 }
 
 //##################################################################################################################
-// API 1: Register a new product (existing)
-app.post('/api/schemes', async (req: Request, res: Response): Promise<void> => {
+// API 1: Register a new scheme (updated for single image)
+app.post('/api/schemes', upload.single('image'), async (req: Request, res: Response): Promise<void> => {
     try {
         const {
             title,
             description,
-            images,
             pointsRequired
         } = req.body;
 
@@ -63,6 +104,11 @@ app.post('/api/schemes', async (req: Request, res: Response): Promise<void> => {
         });
 
         if (existingScheme) {
+            // Clean up uploaded file if scheme already exists
+            if (req.file && fs.existsSync(req.file.path)) {
+                fs.unlinkSync(req.file.path);
+            }
+            
             res.status(400).json({
                 success: false,
                 message: 'Scheme with this title already exists'
@@ -70,12 +116,18 @@ app.post('/api/schemes', async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
+        // Process uploaded image
+        let imagePath: string = '';
+        if (req.file) {
+            imagePath = req.file.path.replace(/\\/g, '/');
+        }
+
         // Create new scheme
         const newScheme = new Scheme({
             title,
             description,
-            images: images || [],
-            pointsRequired
+            image: imagePath, // Single image field instead of array
+            pointsRequired: parseInt(pointsRequired)
         });
 
         const savedScheme = await newScheme.save();
@@ -88,6 +140,28 @@ app.post('/api/schemes', async (req: Request, res: Response): Promise<void> => {
 
     } catch (error: any) {
         console.error('Error creating scheme:', error);
+
+        // Clean up uploaded file on error
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        // Handle multer errors
+        if (error instanceof multer.MulterError) {
+            let message = 'File upload error';
+            if (error.code === 'LIMIT_FILE_SIZE') {
+                message = 'File size too large. Maximum 20MB allowed.';
+            } else if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+                message = 'Unexpected file field. Only "image" field is allowed.';
+            }
+            
+            res.status(400).json({
+                success: false,
+                message,
+                error: error.message
+            });
+            return;
+        }
 
         // Handle validation errors
         if (error.name === 'ValidationError') {
@@ -108,6 +182,7 @@ app.post('/api/schemes', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
+// GET - Fetch all schemes (no changes needed)
 app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
     try {
         const page = parseInt(req.query.page as string) || 1;
@@ -123,16 +198,14 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
             .skip(skip)
             .limit(limit);
 
-        const totalPages = Math.ceil(totalSchemes / limit);
-
         res.status(200).json({
             success: true,
             data: schemes,
             pagination: {
                 currentPage: page,
-                totalPages,
+                totalPages: Math.ceil(totalSchemes / limit),
                 totalSchemes,
-                hasNextPage: page < totalPages,
+                hasNextPage: page < Math.ceil(totalSchemes / limit),
                 hasPrevPage: page > 1
             }
         });
@@ -146,6 +219,173 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
         });
     }
 });
+
+// PUT - Update scheme with optional new image upload (updated for single image)
+app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const {
+            title,
+            description,
+            pointsRequired,
+            removeExistingImage // Boolean flag to remove existing image
+        } = req.body;
+
+        // Validate ObjectId format
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            // Clean up uploaded file
+            if (req.file && fs.existsSync(req.file.path)) {
+                fs.unlinkSync(req.file.path);
+            }
+            
+            res.status(400).json({
+                success: false,
+                message: 'Invalid scheme ID format'
+            });
+            return;
+        }
+
+        // Check if scheme exists
+        const existingScheme = await Scheme.findById(id);
+        if (!existingScheme) {
+            // Clean up uploaded file
+            if (req.file && fs.existsSync(req.file.path)) {
+                fs.unlinkSync(req.file.path);
+            }
+            
+            res.status(404).json({
+                success: false,
+                message: 'Scheme not found'
+            });
+            return;
+        }
+
+        // If title is being updated, check for duplicates (excluding current scheme)
+        if (title && title !== existingScheme.title) {
+            const duplicateScheme = await Scheme.findOne({
+                title: { $regex: new RegExp(`^${title}$`, 'i') },
+                _id: { $ne: id }
+            });
+
+            if (duplicateScheme) {
+                // Clean up uploaded file
+                if (req.file && fs.existsSync(req.file.path)) {
+                    fs.unlinkSync(req.file.path);
+                }
+                
+                res.status(400).json({
+                    success: false,
+                    message: 'Scheme with this title already exists'
+                });
+                return;
+            }
+        }
+
+        // Handle image update
+        let updatedImage = existingScheme.image;
+
+        // Remove existing image if requested
+        if (removeExistingImage === 'true' || removeExistingImage === true) {
+            // Remove existing image from file system
+            if (existingScheme.image && fs.existsSync(existingScheme.image)) {
+                fs.unlinkSync(existingScheme.image);
+            }
+            updatedImage = '';
+        }
+
+        // Add new uploaded image
+        if (req.file) {
+            const newImagePath = req.file.path.replace(/\\/g, '/');
+            
+            // If there's a new image, remove the old one first (replace scenario)
+            if (existingScheme.image && !removeExistingImage && fs.existsSync(existingScheme.image)) {
+                fs.unlinkSync(existingScheme.image);
+            }
+            
+            updatedImage = newImagePath;
+        }
+
+        // Prepare update object with only provided fields
+        const updateData: Partial<IScheme> = {};
+
+        if (title !== undefined) updateData.title = title;
+        if (description !== undefined) updateData.description = description;
+        if (pointsRequired !== undefined) updateData.pointsRequired = parseInt(pointsRequired);
+        
+        // Update image only if there's a change
+        if (req.file || removeExistingImage) {
+            updateData.image = updatedImage;
+        }
+
+        // Update the scheme
+        const updatedScheme = await Scheme.findByIdAndUpdate(
+            id,
+            updateData,
+            {
+                new: true, // Return updated document
+                runValidators: true // Run schema validators
+            }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Scheme updated successfully',
+            data: updatedScheme
+        });
+
+    } catch (error: any) {
+        console.error('Error updating scheme:', error);
+
+        // Clean up uploaded file on error
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        // Handle multer errors
+        if (error instanceof multer.MulterError) {
+            let message = 'File upload error';
+            if (error.code === 'LIMIT_FILE_SIZE') {
+                message = 'File size too large. Maximum 20MB allowed.';
+            } else if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+                message = 'Unexpected file field. Only "image" field is allowed.';
+            }
+            
+            res.status(400).json({
+                success: false,
+                message,
+                error: error.message
+            });
+            return;
+        }
+
+        // Handle validation errors
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map((err: any) => err.message);
+            res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: validationErrors
+            });
+            return;
+        }
+
+        // Handle cast errors (invalid ObjectId)
+        if (error.name === 'CastError') {
+            res.status(400).json({
+                success: false,
+                message: 'Invalid scheme ID'
+            });
+            return;
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
 
 //##################################################################################################################
 // Get all customers with pagination
@@ -291,6 +531,68 @@ app.get('/api/customers/filter', async (req: Request, res: Response): Promise<vo
     }
 });
 
+// Add this endpoint to your Node.js backend
+app.patch('/api/customers/:id/points', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { points } = req.body;
+
+        // Validate points
+        if (typeof points !== 'number' || points < 0) {
+            res.status(400).json({
+                success: false,
+                message: 'Points must be a non-negative number'
+            });
+            return;
+        }
+
+        // Update customer points
+        const updatedCustomer = await Customer.findByIdAndUpdate(
+            id,
+            {
+                points: points,
+                updatedAt: new Date()
+            },
+            {
+                new: true, // Return the updated document
+                select: '-password -__v' // Exclude password and version field
+            }
+        );
+
+        if (!updatedCustomer) {
+            res.status(404).json({
+                success: false,
+                message: 'Customer not found'
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Customer points updated successfully',
+            data: updatedCustomer
+        });
+
+    } catch (error: any) {
+        console.error('Error updating customer points:', error);
+
+        // Handle invalid ObjectId format
+        if (error.name === 'CastError') {
+            res.status(400).json({
+                success: false,
+                message: 'Invalid customer ID format'
+            });
+            return;
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
 //##################################################################################################################
 app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -400,16 +702,15 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
 
         // Save QR code to database with custom id
         const newQR = await QR.create({
-            qrId: generateQRId(),  // <-- custom QR id
-            points: points,
-            url: url,
+            qrId: generateQRId(),
+            points,
+            url,
             format: format.toLowerCase(),
-            size: size,
-            qrCodeUrl: goQRUrl,
-            qrData: qrData,
+            size,
+            qrCodeUrl: goQRUrl,  // <-- saved
+            qrData: qrData,      // <-- saved
             createdAt: new Date()
         });
-
 
         res.status(200).json({
             success: true,
@@ -425,7 +726,7 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
                 createdAt: newQR.createdAt
             }
         });
-        
+
 
     } catch (error: any) {
         console.error('Error generating QR code:', error);
@@ -455,9 +756,11 @@ app.get('/api/qrs', async (req: Request, res: Response): Promise<void> => {
 
         // Get QR codes with pagination and sorting
         const qrs = await QR.find()
-            .sort(sort)
-            .skip(skip)
-            .limit(limit);
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .select('qrId points url format size qrCodeUrl qrData createdAt updatedAt isActive');
+    
 
         const totalPages = Math.ceil(totalQRs / limit);
 
@@ -519,18 +822,29 @@ app.use((err: Error, req: Request, res: Response, next: any) => {
     res.status(500).json({ error: "Something went wrong!" });
 });
 
-// Start server
+app.use('/uploads', express.static('uploads'));
 const PORT = process.env.PORT || 4000;
 
 const startServer = async (): Promise<void> => {
-    await connectDB();
+    try {
+        await connectDB();
 
-    app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-    });
+        app.listen(PORT, () => {
+            console.log(`🚀 Server running on http://localhost:${PORT}`);
+            console.log(`📡 API endpoints available at http://localhost:${PORT}/api/`);
+            console.log('🔗 Available endpoints:');
+            console.log(`   GET  http://localhost:${PORT}/api/test`);
+            console.log(`   GET  http://localhost:${PORT}/api/schemes`);
+            console.log(`   POST http://localhost:${PORT}/api/schemes`);
+            console.log(`   GET  http://localhost:${PORT}/api/schemes/:id`);
+        });
+    } catch (error) {
+        console.error("❌ Failed to start server:", error);
+        process.exit(1);
+    }
 };
 
 startServer().catch((error) => {
-    console.error("Failed to start server:", error);
+    console.error("❌ Failed to start server:", error);
     process.exit(1);
 });

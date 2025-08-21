@@ -6,6 +6,8 @@ export interface IQR extends Document {
     url: string;
     format: string;
     size: string;
+    qrCodeUrl: string;  // <-- add
+    qrData: string;     // <-- add
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -16,7 +18,7 @@ const QRSchema: Schema<IQR> = new Schema(
         qrId: {
             type: String,
             required: true,
-            unique: true, // ensures no duplicates
+            unique: true,
             trim: true
         },
         points: {
@@ -58,13 +60,24 @@ const QRSchema: Schema<IQR> = new Schema(
                 validator: function (v: string) {
                     const sizePattern = /^\d+x\d+$/;
                     if (!sizePattern.test(v)) return false;
-
                     const [width, height] = v.split('x').map(Number);
                     return width === height && width >= 10 && width <= 1000000;
                 },
                 message: 'Size must be in format WIDTHxHEIGHT and be square'
             },
             default: '200x200'
+        },
+        qrCodeUrl: {
+            type: String,
+            required: true
+        },
+        qrData: {
+            type: String,
+            required: true
+        },
+        isActive: {
+            type: Boolean,
+            default: true
         }
     },
     {
@@ -72,6 +85,5 @@ const QRSchema: Schema<IQR> = new Schema(
         versionKey: false
     }
 );
-
 
 export const QR = mongoose.model<IQR>('QR', QRSchema);
