@@ -15,7 +15,7 @@ import fs from 'fs';
 // Configure multer for image uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadPath = 'uploads/schemes/';
+        const uploadPath = 'uploads/';
         // Create directory if it doesn't exist
         if (!fs.existsSync(uploadPath)) {
             fs.mkdirSync(uploadPath, { recursive: true });
@@ -23,9 +23,10 @@ const storage = multer.diskStorage({
         cb(null, uploadPath);
     },
     filename: (req, file, cb) => {
-        // Generate unique filename with timestamp
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, `scheme-${uniqueSuffix}${path.extname(file.originalname)}`);
+        let schemeTitle = req.body.title || "default";
+        schemeTitle = schemeTitle.replace(/[^a-z0-9\-]/gi, '').toLowerCase();
+        const ext = path.extname(file.originalname);
+        cb(null, `scheme-${schemeTitle}-${Date.now()}${ext}`);
     }
 });
 
@@ -43,7 +44,7 @@ const upload = multer({
     fileFilter: fileFilter,
     limits: {
         fileSize: 20 * 1024 * 1024, // 20MB limit
-        files: 1 
+        files: 1
     }
 });
 
@@ -53,6 +54,7 @@ dotenv.config();
 const app = express();
 
 // Middleware
+app.use('/uploads', express.static(path.resolve('uploads')));
 app.use(express.json());
 app.use(cookieParser());
 app.use(
@@ -108,7 +110,7 @@ app.post('/api/schemes', upload.single('image'), async (req: Request, res: Respo
             if (req.file && fs.existsSync(req.file.path)) {
                 fs.unlinkSync(req.file.path);
             }
-            
+
             res.status(400).json({
                 success: false,
                 message: 'Scheme with this title already exists'
@@ -117,17 +119,15 @@ app.post('/api/schemes', upload.single('image'), async (req: Request, res: Respo
         }
 
         // Process uploaded image
-        let imagePath: string = '';
+        let imagePath = '';
         if (req.file) {
-            imagePath = req.file.path.replace(/\\/g, '/');
+            imagePath = `/uploads/${req.file.filename}`;
         }
-
-        // Create new scheme
         const newScheme = new Scheme({
             title,
             description,
-            image: imagePath, // Single image field instead of array
-            pointsRequired: parseInt(pointsRequired)
+            image: imagePath,
+            pointsRequired: parseInt(pointsRequired),
         });
 
         const savedScheme = await newScheme.save();
@@ -154,7 +154,7 @@ app.post('/api/schemes', upload.single('image'), async (req: Request, res: Respo
             } else if (error.code === 'LIMIT_UNEXPECTED_FILE') {
                 message = 'Unexpected file field. Only "image" field is allowed.';
             }
-            
+
             res.status(400).json({
                 success: false,
                 message,
@@ -237,7 +237,7 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
             if (req.file && fs.existsSync(req.file.path)) {
                 fs.unlinkSync(req.file.path);
             }
-            
+
             res.status(400).json({
                 success: false,
                 message: 'Invalid scheme ID format'
@@ -252,7 +252,7 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
             if (req.file && fs.existsSync(req.file.path)) {
                 fs.unlinkSync(req.file.path);
             }
-            
+
             res.status(404).json({
                 success: false,
                 message: 'Scheme not found'
@@ -272,7 +272,7 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
                 if (req.file && fs.existsSync(req.file.path)) {
                     fs.unlinkSync(req.file.path);
                 }
-                
+
                 res.status(400).json({
                     success: false,
                     message: 'Scheme with this title already exists'
@@ -295,13 +295,13 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
 
         // Add new uploaded image
         if (req.file) {
-            const newImagePath = req.file.path.replace(/\\/g, '/');
-            
+            const newImagePath = `/uploads/${req.file.filename}`;
+
             // If there's a new image, remove the old one first (replace scenario)
             if (existingScheme.image && !removeExistingImage && fs.existsSync(existingScheme.image)) {
                 fs.unlinkSync(existingScheme.image);
             }
-            
+
             updatedImage = newImagePath;
         }
 
@@ -311,7 +311,7 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
         if (title !== undefined) updateData.title = title;
         if (description !== undefined) updateData.description = description;
         if (pointsRequired !== undefined) updateData.pointsRequired = parseInt(pointsRequired);
-        
+
         // Update image only if there's a change
         if (req.file || removeExistingImage) {
             updateData.image = updatedImage;
@@ -349,7 +349,7 @@ app.put('/api/schemes/:id', upload.single('image'), async (req: Request, res: Re
             } else if (error.code === 'LIMIT_UNEXPECTED_FILE') {
                 message = 'Unexpected file field. Only "image" field is allowed.';
             }
-            
+
             res.status(400).json({
                 success: false,
                 message,
@@ -756,11 +756,11 @@ app.get('/api/qrs', async (req: Request, res: Response): Promise<void> => {
 
         // Get QR codes with pagination and sorting
         const qrs = await QR.find()
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .select('qrId points url format size qrCodeUrl qrData createdAt updatedAt isActive');
-    
+            .sort(sort)
+            .skip(skip)
+            .limit(limit)
+            .select('qrId points url format size qrCodeUrl qrData createdAt updatedAt isActive');
+
 
         const totalPages = Math.ceil(totalQRs / limit);
 
@@ -822,7 +822,7 @@ app.use((err: Error, req: Request, res: Response, next: any) => {
     res.status(500).json({ error: "Something went wrong!" });
 });
 
-app.use('/uploads', express.static('uploads'));
+
 const PORT = process.env.PORT || 4000;
 
 const startServer = async (): Promise<void> => {
