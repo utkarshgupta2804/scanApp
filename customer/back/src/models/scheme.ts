@@ -3,11 +3,12 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IScheme extends Document {
   title: string;
   description: string;
-  images: string[];
+  image: string; // Changed from images array to single image
   pointsRequired: number;
   createdAt: Date;
   updatedAt: Date;
 }
+
 const SchemeSchema: Schema<IScheme> = new Schema(
   {
     title: {
@@ -22,17 +23,17 @@ const SchemeSchema: Schema<IScheme> = new Schema(
       trim: true,
       maxlength: 1000
     },
-    images: [{
+    image: { // Changed from images array to single image
       type: String,
-      required: true,
+      required: false, // Made optional since schemes might not always have images
       validate: {
         validator: function(v: string) {
           // Basic URL validation or file path validation
-          return /^(https?:\/\/|\/|\.\/|\.\.\/).*\.(jpg|jpeg|png|gif|webp)$/i.test(v);
+          return !v || /^(https?:\/\/|\/|\.\/|\.\.\/).*\.(jpg|jpeg|png|gif|webp)$/i.test(v);
         },
         message: 'Invalid image URL or path format'
       }
-    }],
+    },
     pointsRequired: {
       type: Number,
       required: true,

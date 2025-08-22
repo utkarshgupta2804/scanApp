@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import Customer from "./models/customer";
 import { QR } from "./models/qrs";
 import { Scheme } from "./models/scheme";
+import path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -17,6 +18,10 @@ const app = express();
 // Middleware
 app.use(express.json());
 app.use(cookieParser());
+
+// IMPORTANT: Add static file serving for uploads
+app.use('/uploads', express.static(path.resolve('uploads')));
+
 app.use(
     cors({
         credentials: true,
@@ -192,11 +197,21 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
             .skip(skip)
             .limit(limit);
 
+        // Transform the data to include full image URLs pointing to admin backend
+        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL || 'http://localhost:4001';
+        const schemesWithImageUrls = schemes.map(scheme => ({
+            ...scheme.toObject(),
+            // Convert relative path to full URL pointing to admin backend
+            images: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null,
+            // Keep original field name for compatibility
+            image: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null
+        }));
+
         const totalPages = Math.ceil(totalSchemes / limit);
 
         res.status(200).json({
             success: true,
-            data: schemes,
+            data: schemesWithImageUrls,
             pagination: {
                 currentPage: page,
                 totalPages,
