@@ -7,7 +7,7 @@ import mongoose, { Document, Schema } from "mongoose";
 import dotenv from "dotenv";
 import { Scheme, IScheme } from "./models/scheme";
 import Customer from "./models/customer";
-import { QR } from "./models/qrs";
+import { QRBatch,IQRItem } from "./models/qrs";
 import multer from "multer";
 import path from 'path';
 import fs from 'fs';
@@ -594,13 +594,31 @@ app.patch('/api/customers/:id/points', async (req: Request, res: Response): Prom
 });
 
 //##################################################################################################################
-app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> => {
+function generateBatchId(): string {
+    const timestamp = Date.now().toString(36);
+    const randomPart = Math.random().toString(36).substring(2, 8);
+    return `BATCH_${timestamp}_${randomPart}`.toUpperCase();
+}
+
+// Generate QR ID
+function generateQRId(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let randomPart = '';
+    for (let i = 0; i < 5; i++) {
+        randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `QR${randomPart}`;
+}
+
+// Generate QR codes (both single and bulk)
+app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> => { 
     try {
         const {
             points,
             url,
             format = 'png',
-            size = '200x200'
+            size = '200x200',
+            quantity = 1
         } = req.body;
 
         // Validation
@@ -620,6 +638,15 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
+        const qty = parseInt(quantity);
+        if (!qty || qty < 1 || qty > 100) {
+            res.status(400).json({
+                success: false,
+                message: 'Quantity must be between 1 and 100'
+            });
+            return;
+        }
+
         // Validate format
         const validFormats = ['png', 'jpg', 'jpeg', 'svg'];
         if (!validFormats.includes(format.toLowerCase())) {
@@ -630,7 +657,7 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Validate size format (should be WIDTHxHEIGHT)
+        // Validate size format
         const sizePattern = /^\d+x\d+$/;
         if (!sizePattern.test(size)) {
             res.status(400).json({
@@ -640,11 +667,9 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Extract width and height for validation
         const [width, height] = size.split('x').map(Number);
-
-        // Validate size limits based on format
         const maxSize = ['svg'].includes(format.toLowerCase()) ? 1000000 : 1000;
+        
         if (width < 10 || height < 10 || width > maxSize || height > maxSize) {
             res.status(400).json({
                 success: false,
@@ -653,7 +678,6 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Validate square dimensions
         if (width !== height) {
             res.status(400).json({
                 success: false,
@@ -673,63 +697,86 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Create QR data with points and URL
-        const qrData = `Points: ${points}\nURL: ${url}`;
+        // Generate QR codes
+        const qrCodes: IQRItem[] = [];
+        const errors: any[] = [];
 
-        // Encode the data for URL
-        const encodedData = encodeURIComponent(qrData);
+        for (let i = 0; i < qty; i++) {
+            try {
+                const qrId = generateQRId();
+                
+                // Create QR data with QR ID included
+                const qrData = `QR ID: ${qrId}\nPoints: ${points}\nURL: ${url}`;
+                const encodedData = encodeURIComponent(qrData);
 
-        // Build goQR API URL with standard black and white colors
-        const goQRUrl = `https://api.qrserver.com/v1/create-qr-code/` +
-            `?data=${encodedData}` +
-            `&size=${size}` +
-            `&format=${format.toLowerCase()}` +
-            `&color=0-0-0` +        // Black QR code
-            `&bgcolor=255-255-255` + // White background
-            `&ecc=L` +              // Low error correction for better compatibility
-            `&margin=1` +           // 1 pixel margin
-            `&qzone=4`;             // 4 module quiet zone (recommended)
+                const goQRUrl = `https://api.qrserver.com/v1/create-qr-code/` +
+                    `?data=${encodedData}` +
+                    `&size=${size}` +
+                    `&format=${format.toLowerCase()}` +
+                    `&color=0-0-0` +
+                    `&bgcolor=255-255-255` +
+                    `&ecc=L` +
+                    `&margin=1` +
+                    `&qzone=4`;
 
-        // Function to generate custom QR id
-        function generateQRId(): string {
-            const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-            let randomPart = '';
-            for (let i = 0; i < 5; i++) {  // 5 chars = shorter, total length ~7 with "QR"
-                randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+                qrCodes.push({
+                    qrId,
+                    qrCodeUrl: goQRUrl
+                });
+
+                // Small delay to prevent overwhelming external API
+                if (i < qty - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+            } catch (error: any) {
+                errors.push({
+                    index: i + 1,
+                    error: error.message
+                });
             }
-            return `QR${randomPart}`;
         }
 
-        // Save QR code to database with custom id
-        const newQR = await QR.create({
-            qrId: generateQRId(),
-            points,
-            url,
+        if (qrCodes.length === 0) {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to generate any QR codes',
+                errors
+            });
+            return;
+        }
+
+        // Save batch to database - store original format for display
+        const batchId = generateBatchId();
+        const batchQRData = `Points: ${points}\nURL: ${url}`;
+        
+        const newBatch = await QRBatch.create({
+            batchId,
+            qrData: batchQRData, // Keep original format for batch display
             format: format.toLowerCase(),
             size,
-            qrCodeUrl: goQRUrl,  // <-- saved
-            qrData: qrData,      // <-- saved
-            createdAt: new Date()
+            qrCodes,
+            totalCount: qrCodes.length,
+            isActive: true
         });
 
         res.status(200).json({
             success: true,
-            message: 'QR code generated and saved successfully',
+            message: `Successfully generated ${qrCodes.length} QR code(s)${errors.length > 0 ? ` with ${errors.length} errors` : ''}`,
             data: {
-                qrId: newQR.qrId,  // use custom id
-                points: points,
-                url: url,
-                format: format.toLowerCase(),
-                size: size,
-                qrCodeUrl: goQRUrl,
-                qrData: qrData,
-                createdAt: newQR.createdAt
+                batchId: newBatch.batchId,
+                qrData: newBatch.qrData,
+                format: newBatch.format,
+                size: newBatch.size,
+                qrCodes: newBatch.qrCodes,
+                totalCount: newBatch.totalCount,
+                createdAt: newBatch.createdAt,
+                errors: errors.length > 0 ? errors : undefined
             }
         });
 
-
     } catch (error: any) {
-        console.error('Error generating QR code:', error);
+        console.error('Error generating QR codes:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
@@ -738,8 +785,8 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
     }
 });
 
-// Get all QR codes with pagination, sorting, and filtering
-app.get('/api/qrs', async (req: Request, res: Response): Promise<void> => {
+// Get all QR batches with pagination
+app.get('/api/qr-batches', async (req: Request, res: Response): Promise<void> => {
     try {
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
@@ -747,37 +794,33 @@ app.get('/api/qrs', async (req: Request, res: Response): Promise<void> => {
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
         const skip = (page - 1) * limit;
 
-        // Build sort object
         const sort: any = {};
         sort[sortBy] = sortOrder;
 
-        // Get total count for pagination
-        const totalQRs = await QR.countDocuments();
-
-        // Get QR codes with pagination and sorting
-        const qrs = await QR.find()
+        const totalBatches = await QRBatch.countDocuments({ isActive: true });
+        
+        const batches = await QRBatch.find({ isActive: true })
             .sort(sort)
             .skip(skip)
             .limit(limit)
-            .select('qrId points url format size qrCodeUrl qrData createdAt updatedAt isActive');
+            .select('batchId qrData format size qrCodes totalCount createdAt updatedAt isActive');
 
-
-        const totalPages = Math.ceil(totalQRs / limit);
+        const totalPages = Math.ceil(totalBatches / limit);
 
         res.status(200).json({
             success: true,
-            data: qrs,
+            data: batches,
             pagination: {
                 currentPage: page,
                 totalPages,
-                totalQRs,
+                totalBatches,
                 hasNextPage: page < totalPages,
                 hasPrevPage: page > 1
             }
         });
 
     } catch (error: any) {
-        console.error('Error fetching QR codes:', error);
+        console.error('Error fetching QR batches:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
@@ -786,14 +829,262 @@ app.get('/api/qrs', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
-// Get single QR code by qrId
-app.get('/api/qrs/:qrId', async (req: Request, res: Response): Promise<void> => {
+// Get single QR batch by batchId
+app.get('/api/qr-batches/:batchId', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { batchId } = req.params;
+
+        const batch = await QRBatch.findOne({ batchId, isActive: true });
+
+        if (!batch) {
+            res.status(404).json({
+                success: false,
+                message: 'QR batch not found'
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: batch
+        });
+
+    } catch (error: any) {
+        console.error('Error fetching QR batch:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
+// Delete QR batch
+app.delete('/api/qr-batches/:batchId', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { batchId } = req.params;
+
+        const batch = await QRBatch.findOneAndUpdate(
+            { batchId },
+            { isActive: false },
+            { new: true }
+        );
+
+        if (!batch) {
+            res.status(404).json({
+                success: false,
+                message: 'QR batch not found'
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'QR batch deleted successfully'
+        });
+
+    } catch (error: any) {
+        console.error('Error deleting QR batch:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
+// Job status tracking for async operations
+interface JobStatus {
+    id: string;
+    status: 'pending' | 'processing' | 'completed' | 'failed';
+    progress: number;
+    total: number;
+    result?: any;
+    error?: string;
+    createdAt: Date;
+}
+
+const jobStorage = new Map<string, JobStatus>();
+
+function generateJobId(): string {
+    return `job_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+}
+
+// Async bulk generation (for very large quantities)
+app.post('/api/generate-bulk-qr-async', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const {
+            points,
+            url,
+            format = 'png',
+            size = '200x200',
+            quantity = 1
+        } = req.body;
+
+        // Basic validation
+        if (!points || !url || !quantity || quantity < 1 || quantity > 100) {
+            res.status(400).json({
+                success: false,
+                message: 'Invalid parameters'
+            });
+            return;
+        }
+
+        const jobId = generateJobId();
+        
+        jobStorage.set(jobId, {
+            id: jobId,
+            status: 'pending',
+            progress: 0,
+            total: quantity,
+            createdAt: new Date()
+        });
+
+        processQRGeneration(jobId, { points, url, format, size, quantity });
+
+        res.status(202).json({
+            success: true,
+            message: 'QR generation job started',
+            jobId: jobId
+        });
+
+    } catch (error: any) {
+        console.error('Error starting bulk QR generation:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
+// Job status endpoint
+app.get('/api/job-status/:jobId', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { jobId } = req.params;
+        const job = jobStorage.get(jobId);
+
+        if (!job) {
+            res.status(404).json({
+                success: false,
+                message: 'Job not found'
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: job
+        });
+
+    } catch (error: any) {
+        console.error('Error fetching job status:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+});
+
+// Process QR generation asynchronously
+async function processQRGeneration(jobId: string, params: any) {
+    const job = jobStorage.get(jobId);
+    if (!job) return;
+
+    try {
+        job.status = 'processing';
+        jobStorage.set(jobId, job);
+
+        const { points, url, format, size, quantity } = params;
+        const qrCodes: IQRItem[] = [];
+        const errors: any[] = [];
+
+        for (let i = 0; i < quantity; i++) {
+            try {
+                const qrId = generateQRId();
+                
+                // Create QR data with QR ID included for each individual QR code
+                const qrData = `QR ID: ${qrId}\nPoints: ${points}\nURL: ${url}`;
+                const encodedData = encodeURIComponent(qrData);
+                
+                const goQRUrl = `https://api.qrserver.com/v1/create-qr-code/` +
+                    `?data=${encodedData}&size=${size}&format=${format.toLowerCase()}` +
+                    `&color=0-0-0&bgcolor=255-255-255&ecc=L&margin=1&qzone=4`;
+
+                qrCodes.push({
+                    qrId,
+                    qrCodeUrl: goQRUrl
+                });
+
+                job.progress = i + 1;
+                jobStorage.set(jobId, job);
+
+                if (i < quantity - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
+
+            } catch (error: any) {
+                errors.push({
+                    index: i + 1,
+                    error: error.message
+                });
+            }
+        }
+
+        // Save batch to database
+        const batchId = generateBatchId();
+        const batchQRData = `Points: ${points}\nURL: ${url}`;
+        
+        const newBatch = await QRBatch.create({
+            batchId,
+            qrData: batchQRData, // Keep original format for batch display
+            format: format.toLowerCase(),
+            size,
+            qrCodes,
+            totalCount: qrCodes.length,
+            isActive: true
+        });
+
+        job.status = 'completed';
+        job.result = {
+            batchId: newBatch.batchId,
+            qrData: newBatch.qrData,
+            qrCodes: newBatch.qrCodes,
+            totalCount: newBatch.totalCount,
+            errors,
+            summary: {
+                requested: quantity,
+                successful: qrCodes.length,
+                failed: errors.length
+            }
+        };
+        jobStorage.set(jobId, job);
+
+        // Clean up job after 1 hour
+        setTimeout(() => {
+            jobStorage.delete(jobId);
+        }, 60 * 60 * 1000);
+
+    } catch (error: any) {
+        job.status = 'failed';
+        job.error = error.message;
+        jobStorage.set(jobId, job);
+    }
+}
+
+// Add new endpoint to get QR data by QR ID
+app.get('/api/qr/:qrId', async (req: Request, res: Response): Promise<void> => {
     try {
         const { qrId } = req.params;
 
-        const qr = await QR.findOne({ qrId });
+        // Find the batch containing this QR ID
+        const batch = await QRBatch.findOne({
+            'qrCodes.qrId': qrId,
+            isActive: true
+        });
 
-        if (!qr) {
+        if (!batch) {
             res.status(404).json({
                 success: false,
                 message: 'QR code not found'
@@ -801,13 +1092,36 @@ app.get('/api/qrs/:qrId', async (req: Request, res: Response): Promise<void> => 
             return;
         }
 
+        // Find the specific QR code
+        const qrCode = batch.qrCodes.find(qr => qr.qrId === qrId);
+        
+        if (!qrCode) {
+            res.status(404).json({
+                success: false,
+                message: 'QR code not found in batch'
+            });
+            return;
+        }
+
+        // Parse batch data to get points and URL
+        const lines = batch.qrData.split('\n');
+        const points = lines[0]?.replace('Points: ', '') || '';
+        const url = lines[1]?.replace('URL: ', '') || '';
+
         res.status(200).json({
             success: true,
-            data: qr
+            data: {
+                qrId: qrCode.qrId,
+                points: parseInt(points) || 0,
+                url: url,
+                qrCodeUrl: qrCode.qrCodeUrl,
+                batchId: batch.batchId,
+                createdAt: batch.createdAt
+            }
         });
 
     } catch (error: any) {
-        console.error('Error fetching QR code:', error);
+        console.error('Error fetching QR data:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
@@ -822,29 +1136,21 @@ app.use((err: Error, req: Request, res: Response, next: any) => {
     res.status(500).json({ error: "Something went wrong!" });
 });
 
-
 const PORT = process.env.PORT || 4000;
 
 const startServer = async (): Promise<void> => {
     try {
         await connectDB();
-
         app.listen(PORT, () => {
-            console.log(`🚀 Server running on http://localhost:${PORT}`);
-            console.log(`📡 API endpoints available at http://localhost:${PORT}/api/`);
-            console.log('🔗 Available endpoints:');
-            console.log(`   GET  http://localhost:${PORT}/api/test`);
-            console.log(`   GET  http://localhost:${PORT}/api/schemes`);
-            console.log(`   POST http://localhost:${PORT}/api/schemes`);
-            console.log(`   GET  http://localhost:${PORT}/api/schemes/:id`);
+            console.log(`http://localhost:${PORT}`);
         });
     } catch (error) {
-        console.error("❌ Failed to start server:", error);
+        console.error("Failed to start server:", error);
         process.exit(1);
     }
 };
 
 startServer().catch((error) => {
-    console.error("❌ Failed to start server:", error);
+    console.error("Failed to start server:", error);
     process.exit(1);
-});
+})

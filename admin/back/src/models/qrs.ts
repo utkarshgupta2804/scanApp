@@ -1,50 +1,47 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IQR extends Document {
+// Individual QR code interface within a batch
+export interface IQRItem {
     qrId: string;
-    points: number;
-    url: string;
+    qrCodeUrl: string;
+}
+
+// Main QR Batch interface
+export interface IQRBatch extends Document {
+    batchId: string;
+    qrData: string;  // Common data for all QRs in batch (Points: X\nURL: Y)
     format: string;
     size: string;
-    qrCodeUrl: string;  // <-- add
-    qrData: string;     // <-- add
+    qrCodes: IQRItem[];  // Array of individual QR codes
+    totalCount: number;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
 
-const QRSchema: Schema<IQR> = new Schema(
+const QRItemSchema = new Schema<IQRItem>({
+    qrId: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    qrCodeUrl: {
+        type: String,
+        required: true
+    }
+}, { _id: false }); // Don't create separate _id for array items
+
+const QRBatchSchema: Schema<IQRBatch> = new Schema(
     {
-        qrId: {
+        batchId: {
             type: String,
             required: true,
             unique: true,
             trim: true
         },
-        points: {
-            type: Number,
-            required: true,
-            min: 1,
-            validate: {
-                validator: Number.isInteger,
-                message: 'Points must be a whole number'
-            }
-        },
-        url: {
+        qrData: {
             type: String,
-            required: true,
-            trim: true,
-            validate: {
-                validator: function (v: string) {
-                    try {
-                        new URL(v);
-                        return true;
-                    } catch (error) {
-                        return false;
-                    }
-                },
-                message: 'Invalid URL format'
-            }
+            required: true
         },
         format: {
             type: String,
@@ -67,13 +64,11 @@ const QRSchema: Schema<IQR> = new Schema(
             },
             default: '200x200'
         },
-        qrCodeUrl: {
-            type: String,
-            required: true
-        },
-        qrData: {
-            type: String,
-            required: true
+        qrCodes: [QRItemSchema],
+        totalCount: {
+            type: Number,
+            required: true,
+            min: 1
         },
         isActive: {
             type: Boolean,
@@ -86,4 +81,4 @@ const QRSchema: Schema<IQR> = new Schema(
     }
 );
 
-export const QR = mongoose.model<IQR>('QR', QRSchema);
+export const QRBatch = mongoose.model<IQRBatch>('QRBatch', QRBatchSchema);
