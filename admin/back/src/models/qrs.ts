@@ -4,6 +4,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IQRItem {
     qrId: string;
     qrCodeUrl: string;
+    isScanned: boolean;  // New attribute to track if QR is scanned
 }
 
 // Main QR Batch interface
@@ -27,6 +28,11 @@ const QRItemSchema = new Schema<IQRItem>({
     },
     qrCodeUrl: {
         type: String,
+        required: true
+    },
+    isScanned: {
+        type: Boolean,
+        default: false,  // Default to false when QR is created
         required: true
     }
 }, { _id: false }); // Don't create separate _id for array items

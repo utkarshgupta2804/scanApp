@@ -1,48 +1,53 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IQR extends Document {
+// Individual QR code interface within a batch
+export interface IQRItem {
     qrId: string;
-    points: number;
-    url: string;
+    qrCodeUrl: string;
+    isScanned: boolean;  // New attribute to track if QR is scanned
+}
+
+// Main QR Batch interface
+export interface IQRBatch extends Document {
+    batchId: string;
+    qrData: string;  // Common data for all QRs in batch (Points: X\nURL: Y)
     format: string;
     size: string;
+    qrCodes: IQRItem[];  // Array of individual QR codes
+    totalCount: number;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
 
-const QRSchema: Schema<IQR> = new Schema(
+const QRItemSchema = new Schema<IQRItem>({
+    qrId: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    qrCodeUrl: {
+        type: String,
+        required: true
+    },
+    isScanned: {
+        type: Boolean,
+        default: false,  // Default to false when QR is created
+        required: true
+    }
+}, { _id: false }); // Don't create separate _id for array items
+
+const QRBatchSchema: Schema<IQRBatch> = new Schema(
     {
-        qrId: {
+        batchId: {
             type: String,
             required: true,
-            unique: true, // ensures no duplicates
+            unique: true,
             trim: true
         },
-        points: {
-            type: Number,
-            required: true,
-            min: 1,
-            validate: {
-                validator: Number.isInteger,
-                message: 'Points must be a whole number'
-            }
-        },
-        url: {
+        qrData: {
             type: String,
-            required: true,
-            trim: true,
-            validate: {
-                validator: function (v: string) {
-                    try {
-                        new URL(v);
-                        return true;
-                    } catch (error) {
-                        return false;
-                    }
-                },
-                message: 'Invalid URL format'
-            }
+            required: true
         },
         format: {
             type: String,
@@ -58,13 +63,22 @@ const QRSchema: Schema<IQR> = new Schema(
                 validator: function (v: string) {
                     const sizePattern = /^\d+x\d+$/;
                     if (!sizePattern.test(v)) return false;
-
                     const [width, height] = v.split('x').map(Number);
                     return width === height && width >= 10 && width <= 1000000;
                 },
                 message: 'Size must be in format WIDTHxHEIGHT and be square'
             },
             default: '200x200'
+        },
+        qrCodes: [QRItemSchema],
+        totalCount: {
+            type: Number,
+            required: true,
+            min: 1
+        },
+        isActive: {
+            type: Boolean,
+            default: true
         }
     },
     {
@@ -73,5 +87,4 @@ const QRSchema: Schema<IQR> = new Schema(
     }
 );
 
-
-export const QR = mongoose.model<IQR>('QR', QRSchema);
+export const QRBatch = mongoose.model<IQRBatch>('QRBatch', QRBatchSchema);

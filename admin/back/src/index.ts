@@ -1,7 +1,6 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import mongoose, { Document, Schema } from "mongoose";
 import dotenv from "dotenv";
@@ -434,103 +433,6 @@ app.get('/api/customers', async (req: Request, res: Response): Promise<void> => 
         });
     }
 });
-
-// Filter customers based on different criteria
-app.get('/api/customers/filter', async (req: Request, res: Response): Promise<void> => {
-    try {
-        const {
-            city,
-            minPoints,
-            maxPoints,
-            search,
-            sortBy,
-            sortOrder,
-            page,
-            limit
-        } = req.query;
-
-        // Build filter object
-        const filter: any = {};
-
-        // City filter
-        if (city) {
-            filter.city = { $regex: city, $options: 'i' };
-        }
-
-        // Points range filter
-        if (minPoints || maxPoints) {
-            filter.points = {};
-            if (minPoints) filter.points.$gte = parseInt(minPoints as string);
-            if (maxPoints) filter.points.$lte = parseInt(maxPoints as string);
-        }
-
-        // Search filter (searches in name and username)
-        if (search) {
-            filter.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { username: { $regex: search, $options: 'i' } }
-            ];
-        }
-
-        // Pagination
-        const pageNum = parseInt(page as string) || 1;
-        const limitNum = parseInt(limit as string) || 10;
-        const skip = (pageNum - 1) * limitNum;
-
-        // Sorting
-        const sort: any = {};
-        const sortField = (sortBy as string) || 'createdAt';
-        const sortDirection = sortOrder === 'asc' ? 1 : -1;
-        sort[sortField] = sortDirection;
-
-        // Get total count for pagination
-        const totalCustomers = await Customer.countDocuments(filter);
-
-        // Get filtered customers
-        const customers = await Customer.find(filter)
-            .sort(sort)
-            .skip(skip)
-            .limit(limitNum)
-            .select('-password -__v');
-
-        const totalPages = Math.ceil(totalCustomers / limitNum);
-
-        // Get unique cities for filter options
-        const cities = await Customer.distinct('city');
-
-        res.status(200).json({
-            success: true,
-            data: customers,
-            filters: {
-                appliedFilters: {
-                    city,
-                    minPoints,
-                    maxPoints,
-                    search
-                },
-                availableFilters: {
-                    cities
-                }
-            },
-            pagination: {
-                currentPage: pageNum,
-                totalPages,
-                totalCustomers,
-                hasNextPage: pageNum < totalPages,
-                hasPrevPage: pageNum > 1
-            }
-        });
-
-    } catch (error: any) {
-        console.error('Error filtering customers:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error',
-            error: error.message
-        });
-    }
-});
-
 // Add this endpoint to your Node.js backend
 app.patch('/api/customers/:id/points', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -611,6 +513,8 @@ function generateQRId(): string {
 }
 
 // Generate QR codes (both single and bulk)
+
+// Generate QR codes (both single and bulk) - UPDATED
 app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> => { 
     try {
         const {
@@ -697,6 +601,9 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
+        // Generate batch ID first - MOVED UP
+        const batchId = generateBatchId();
+
         // Generate QR codes
         const qrCodes: IQRItem[] = [];
         const errors: any[] = [];
@@ -705,8 +612,8 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             try {
                 const qrId = generateQRId();
                 
-                // Create QR data with QR ID included
-                const qrData = `QR ID: ${qrId}\nPoints: ${points}\nURL: ${url}`;
+                // Create QR data with QR ID AND BATCH ID included - UPDATED
+                const qrData = `QR ID: ${qrId}\nBatch ID: ${batchId}\nPoints: ${points}\nURL: ${url}`;
                 const encodedData = encodeURIComponent(qrData);
 
                 const goQRUrl = `https://api.qrserver.com/v1/create-qr-code/` +
@@ -721,7 +628,8 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
 
                 qrCodes.push({
                     qrId,
-                    qrCodeUrl: goQRUrl
+                    qrCodeUrl: goQRUrl,
+                    isScanned: false  // Set default value to false
                 });
 
                 // Small delay to prevent overwhelming external API
@@ -746,13 +654,12 @@ app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Save batch to database - store original format for display
-        const batchId = generateBatchId();
-        const batchQRData = `Points: ${points}\nURL: ${url}`;
+        // Save batch to database - UPDATED batch data format
+        const batchQRData = `Batch ID: ${batchId}\nPoints: ${points}\nURL: ${url}`;
         
         const newBatch = await QRBatch.create({
             batchId,
-            qrData: batchQRData, // Keep original format for batch display
+            qrData: batchQRData, // Updated format for batch display
             format: format.toLowerCase(),
             size,
             qrCodes,
@@ -958,35 +865,6 @@ app.post('/api/generate-bulk-qr-async', async (req: Request, res: Response): Pro
     }
 });
 
-// Job status endpoint
-app.get('/api/job-status/:jobId', async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { jobId } = req.params;
-        const job = jobStorage.get(jobId);
-
-        if (!job) {
-            res.status(404).json({
-                success: false,
-                message: 'Job not found'
-            });
-            return;
-        }
-
-        res.status(200).json({
-            success: true,
-            data: job
-        });
-
-    } catch (error: any) {
-        console.error('Error fetching job status:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error',
-            error: error.message
-        });
-    }
-});
-
 // Process QR generation asynchronously
 async function processQRGeneration(jobId: string, params: any) {
     const job = jobStorage.get(jobId);
@@ -1000,12 +878,15 @@ async function processQRGeneration(jobId: string, params: any) {
         const qrCodes: IQRItem[] = [];
         const errors: any[] = [];
 
+        // Generate batch ID first - MOVED UP
+        const batchId = generateBatchId();
+
         for (let i = 0; i < quantity; i++) {
             try {
                 const qrId = generateQRId();
                 
-                // Create QR data with QR ID included for each individual QR code
-                const qrData = `QR ID: ${qrId}\nPoints: ${points}\nURL: ${url}`;
+                // Create QR data with QR ID AND BATCH ID included - UPDATED
+                const qrData = `QR ID: ${qrId}\nBatch ID: ${batchId}\nPoints: ${points}\nURL: ${url}`;
                 const encodedData = encodeURIComponent(qrData);
                 
                 const goQRUrl = `https://api.qrserver.com/v1/create-qr-code/` +
@@ -1014,7 +895,8 @@ async function processQRGeneration(jobId: string, params: any) {
 
                 qrCodes.push({
                     qrId,
-                    qrCodeUrl: goQRUrl
+                    qrCodeUrl: goQRUrl,
+                    isScanned: false  // Set default value to false
                 });
 
                 job.progress = i + 1;
@@ -1032,13 +914,12 @@ async function processQRGeneration(jobId: string, params: any) {
             }
         }
 
-        // Save batch to database
-        const batchId = generateBatchId();
-        const batchQRData = `Points: ${points}\nURL: ${url}`;
+        // Save batch to database - UPDATED batch data format
+        const batchQRData = `Batch ID: ${batchId}\nPoints: ${points}\nURL: ${url}`;
         
         const newBatch = await QRBatch.create({
             batchId,
-            qrData: batchQRData, // Keep original format for batch display
+            qrData: batchQRData, // Updated format for batch display
             format: format.toLowerCase(),
             size,
             qrCodes,
@@ -1072,63 +953,6 @@ async function processQRGeneration(jobId: string, params: any) {
         jobStorage.set(jobId, job);
     }
 }
-
-// Add new endpoint to get QR data by QR ID
-app.get('/api/qr/:qrId', async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { qrId } = req.params;
-
-        // Find the batch containing this QR ID
-        const batch = await QRBatch.findOne({
-            'qrCodes.qrId': qrId,
-            isActive: true
-        });
-
-        if (!batch) {
-            res.status(404).json({
-                success: false,
-                message: 'QR code not found'
-            });
-            return;
-        }
-
-        // Find the specific QR code
-        const qrCode = batch.qrCodes.find(qr => qr.qrId === qrId);
-        
-        if (!qrCode) {
-            res.status(404).json({
-                success: false,
-                message: 'QR code not found in batch'
-            });
-            return;
-        }
-
-        // Parse batch data to get points and URL
-        const lines = batch.qrData.split('\n');
-        const points = lines[0]?.replace('Points: ', '') || '';
-        const url = lines[1]?.replace('URL: ', '') || '';
-
-        res.status(200).json({
-            success: true,
-            data: {
-                qrId: qrCode.qrId,
-                points: parseInt(points) || 0,
-                url: url,
-                qrCodeUrl: qrCode.qrCodeUrl,
-                batchId: batch.batchId,
-                createdAt: batch.createdAt
-            }
-        });
-
-    } catch (error: any) {
-        console.error('Error fetching QR data:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error',
-            error: error.message
-        });
-    }
-});
 
 // Error handling middleware
 app.use((err: Error, req: Request, res: Response, next: any) => {
