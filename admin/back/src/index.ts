@@ -67,10 +67,6 @@ app.use(
     })
 );
 
-// Constants
-const salt = bcrypt.genSaltSync(10);
-const secret = process.env.JWT_SECRET || "";
-
 // Connect to MongoDB
 const connectDB = async (): Promise<void> => {
     try {
