@@ -27,7 +27,7 @@ app.use('/uploads', express.static(path.resolve('uploads')));
 app.use(
     cors({
         credentials: true,
-        origin: process.env.CLIENT_URL || "http://localhost:3000",
+        origin: process.env.CLIENT_URL ,
     })
 );
 
