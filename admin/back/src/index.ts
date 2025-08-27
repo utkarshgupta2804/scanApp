@@ -58,14 +58,13 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
     cors({
-        credentials: true,
-        origin: [
-            process.env.CLIENT_URL || "http://localhost:3000",
-        ],
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+      credentials: true,
+      origin: process.env.CLIENT_URL, // just pass it as a string
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     })
-);
+  );
+  
 
 // Connect to MongoDB
 const connectDB = async (): Promise<void> => {

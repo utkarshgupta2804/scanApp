@@ -1,0 +1,6 @@
+/back/node_modules
+/back/.env
+/back/yarn.lock
+/back/package-lock.json
+
+
