@@ -536,7 +536,7 @@ app.post("/logout", (req: Request, res: Response): void => {
 });
 
 // Get customer profile endpoint
-app.get("/profile", async (req: Request, res: Response): Promise<void> => {
+app.get("/profile", authenticateToken, async (req: Request, res: Response): Promise<void> => {
     try {
         const token = req.cookies.token;
 
