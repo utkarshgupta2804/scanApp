@@ -100,7 +100,6 @@ interface JWTPayload {
 }
 
 // Middleware to authenticate JWT token
-// Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
     let token;
     
