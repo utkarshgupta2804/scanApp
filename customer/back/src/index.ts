@@ -101,7 +101,16 @@ interface JWTPayload {
 
 // Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
-    const token = req.cookies.token;
+    let token;
+    
+    // Check Authorization header first
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+    // Fallback to cookies
+    else if (req.cookies && req.cookies.token) {
+        token = req.cookies.token;
+    }
 
     if (!token) {
         res.status(401).json({ error: "Access token required" });
@@ -712,8 +721,6 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
                     fullImageUrl = `${ADMIN_BACKEND_URL}${imagePath}`;
                 }
             }
-            
-            console.log(`Scheme: ${schemeObj.title}, Original image: ${schemeObj.image}, Full URL: ${fullImageUrl}`);
             
             return {
                 ...schemeObj,
