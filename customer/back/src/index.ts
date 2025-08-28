@@ -101,33 +101,48 @@ interface JWTPayload {
 
 // Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
+    console.log('=== AUTH MIDDLEWARE DEBUG ===');
+    console.log('Raw Authorization header:', JSON.stringify(req.headers.authorization));
+    console.log('Cookies:', JSON.stringify(req.cookies));
+    
     let token;
     
     // Check Authorization header first
     if (req.headers.authorization) {
+        console.log('Processing Authorization header...');
         // Clean up the authorization header - remove extra spaces and line breaks
         const authHeader = req.headers.authorization.replace(/\s+/g, ' ').trim();
+        console.log('Cleaned auth header:', JSON.stringify(authHeader));
+        
         if (authHeader.startsWith('Bearer ')) {
             token = authHeader.substring(7).trim(); // Remove "Bearer " and trim any remaining spaces
+            console.log('Extracted token from header:', token ? 'EXISTS' : 'NULL');
+            console.log('Token length:', token?.length);
         }
     }
     // Fallback to cookies
     else if (req.cookies && req.cookies.token) {
         token = req.cookies.token.trim(); // Also trim cookie token just in case
+        console.log('Using cookie token:', token ? 'EXISTS' : 'NULL');
     }
+    
+    console.log('Final token:', token ? 'EXISTS' : 'NULL');
+    console.log('Token preview:', token ? token.substring(0, 20) + '...' : 'NO TOKEN');
 
     if (!token) {
+        console.log('❌ No token found');
         res.status(401).json({ error: "Access token required" });
         return;
     }
 
     try {
         const decoded = jwt.verify(token, secret) as JWTPayload;
+        console.log('✅ Token verified successfully');
         (req as any).user = decoded;
         next();
     } catch (err) {
-        console.log('Token verification error:', err);
-        console.log('Token received:', token);
+        console.log('❌ Token verification error:', err);
+        console.log('Failed token:', token);
         res.status(403).json({ error: "Invalid or expired token" });
     }
 };
@@ -535,18 +550,13 @@ app.post("/logout", (req: Request, res: Response): void => {
     }).json({ message: "Logged out successfully" });
 });
 
-// Get customer profile endpoint
 app.get("/profile", authenticateToken, async (req: Request, res: Response): Promise<void> => {
     try {
-        const token = req.cookies.token;
-
-        if (!token) {
-            res.status(401).json({ error: "Access token required" });
-            return;
-        }
-
-        const decoded = jwt.verify(token, secret) as JWTPayload;
-        const customer = await Customer.findById(decoded.id).select('-password');
+        // The token is already verified in authenticateToken middleware
+        // User data is available in req.user
+        const userId = (req as any).user.id;
+        
+        const customer = await Customer.findById(userId).select('-password');
 
         if (!customer) {
             res.status(404).json({ error: "Customer not found" });
@@ -555,7 +565,8 @@ app.get("/profile", authenticateToken, async (req: Request, res: Response): Prom
 
         res.json(customer);
     } catch (err: any) {
-        res.status(403).json({ error: "Invalid or expired token" });
+        console.log('Profile fetch error:', err);
+        res.status(500).json({ error: "Internal server error" });
     }
 });
 
