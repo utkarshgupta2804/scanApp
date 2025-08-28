@@ -100,16 +100,21 @@ interface JWTPayload {
 }
 
 // Middleware to authenticate JWT token
+// Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
     let token;
     
     // Check Authorization header first
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-        token = req.headers.authorization.split(' ')[1];
+    if (req.headers.authorization) {
+        // Clean up the authorization header - remove extra spaces and line breaks
+        const authHeader = req.headers.authorization.replace(/\s+/g, ' ').trim();
+        if (authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7).trim(); // Remove "Bearer " and trim any remaining spaces
+        }
     }
     // Fallback to cookies
     else if (req.cookies && req.cookies.token) {
-        token = req.cookies.token;
+        token = req.cookies.token.trim(); // Also trim cookie token just in case
     }
 
     if (!token) {
@@ -122,6 +127,8 @@ const authenticateToken = (req: Request, res: Response, next: any) => {
         (req as any).user = decoded;
         next();
     } catch (err) {
+        console.log('Token verification error:', err);
+        console.log('Token received:', token);
         res.status(403).json({ error: "Invalid or expired token" });
     }
 };
