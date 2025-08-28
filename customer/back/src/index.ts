@@ -675,6 +675,8 @@ app.post("/api/scan-qr", authenticateToken, async (req: Request, res: Response):
 });
 
 //##################################################################################################################
+// Replace your existing schemes endpoint in your client backend with this:
+
 app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
     try {
         const page = parseInt(req.query.page as string) || 1;
@@ -686,19 +688,39 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
 
         // Get schemes with pagination
         const schemes = await Scheme.find()
-            .sort({ createdAt: -1 }) // Sort by newest first
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
-        // Transform the data to include full image URLs pointing to admin backend
-        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL;
-        const schemesWithImageUrls = schemes.map(scheme => ({
-            ...scheme.toObject(),
-            // Convert relative path to full URL pointing to admin backend
-            images: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null,
-            // Keep original field name for compatibility
-            image: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null
-        }));
+        // ADMIN_BACKEND_URL should point to your admin backend where images are stored
+        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL 
+        const schemesWithImageUrls = schemes.map(scheme => {
+            const schemeObj = scheme.toObject();
+            
+            let fullImageUrl = null;
+            
+            // If scheme has an image field
+            if (schemeObj.image) {
+                // If it's already a complete URL, use as is
+                if (schemeObj.image.startsWith('http')) {
+                    fullImageUrl = schemeObj.image;
+                } 
+                // If it's a relative path, prepend admin backend URL
+                else {
+                    // Remove leading slash if present to avoid double slashes
+                    const imagePath = schemeObj.image.startsWith('/') ? schemeObj.image : `/${schemeObj.image}`;
+                    fullImageUrl = `${ADMIN_BACKEND_URL}${imagePath}`;
+                }
+            }
+            
+            console.log(`Scheme: ${schemeObj.title}, Original image: ${schemeObj.image}, Full URL: ${fullImageUrl}`);
+            
+            return {
+                ...schemeObj,
+                image: fullImageUrl,
+                images: fullImageUrl // Keep both for compatibility
+            };
+        });
 
         const totalPages = Math.ceil(totalSchemes / limit);
 
