@@ -27,13 +27,13 @@ app.use('/uploads', express.static(path.resolve('uploads')));
 app.use(
     cors({
         credentials: true,
-        origin: process.env.CLIENT_URL || "http://localhost:3000",
+        origin: process.env.CLIENT_URL ,
     })
 );
 
 // Constants
 const salt = bcrypt.genSaltSync(10);
-const secret = process.env.JWT_SECRET || "fallback-secret-key-change-in-production";
+const secret = process.env.JWT_SECRET || "";
 
 // Enhanced Email transporter configuration with better error handling
 const createEmailTransporter = () => {
@@ -85,9 +85,6 @@ const testEmailConfiguration = async () => {
 const connectDB = async (): Promise<void> => {
     try {
         const mongoUri = process.env.MONGODB_URI || "";
-        if (!mongoUri) {
-            throw new Error("MONGODB_URI environment variable is required");
-        }
         await mongoose.connect(mongoUri);
         console.log("Connected to MongoDB");
     } catch (error) {
@@ -102,20 +99,11 @@ interface JWTPayload {
     id: string;
 }
 
-// Enhanced middleware to authenticate JWT token with better error handling
+// Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
-    // Try to get token from cookies first, then from Authorization header
-    let token = req.cookies.token;
-    
-    if (!token) {
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            token = authHeader.substring(7);
-        }
-    }
+    const token = req.cookies.token;
 
     if (!token) {
-        console.log('[Auth] No token provided');
         res.status(401).json({ error: "Access token required" });
         return;
     }
@@ -123,37 +111,10 @@ const authenticateToken = (req: Request, res: Response, next: any) => {
     try {
         const decoded = jwt.verify(token, secret) as JWTPayload;
         (req as any).user = decoded;
-        console.log(`[Auth] Token verified for user: ${decoded.username}`);
         next();
-    } catch (err: any) {
-        console.log('[Auth] Token verification failed:', err.message);
+    } catch (err) {
         res.status(403).json({ error: "Invalid or expired token" });
     }
-};
-
-// Optional authentication middleware (doesn't fail if no token)
-const optionalAuth = (req: Request, res: Response, next: any) => {
-    let token = req.cookies.token;
-    
-    if (!token) {
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            token = authHeader.substring(7);
-        }
-    }
-
-    if (token) {
-        try {
-            const decoded = jwt.verify(token, secret) as JWTPayload;
-            (req as any).user = decoded;
-            console.log(`[OptionalAuth] Token verified for user: ${decoded.username}`);
-        } catch (err: any) {
-            console.log('[OptionalAuth] Token verification failed:', err.message);
-            // Don't fail, just continue without user
-        }
-    }
-    
-    next();
 };
 
 //##################################################################################################################
@@ -181,15 +142,11 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        // Normalize email and username to lowercase
-        const normalizedEmail = email.toLowerCase();
-        const normalizedUsername = username.toLowerCase();
-
         const customerDoc = await Customer.create({
             name,
             city,
-            username: normalizedUsername,
-            email: normalizedEmail,
+            username,
+            email,
             password: bcrypt.hashSync(password, salt),
             points: 0
         });
@@ -202,7 +159,6 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
 
         jwt.sign(payload, secret, { expiresIn: "7d" }, (err, token) => {
             if (err) {
-                console.error('Token generation failed:', err);
                 res.status(500).json({ error: "Token generation failed" });
                 return;
             }
@@ -210,23 +166,14 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
             res.cookie("token", token, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === "production",
-                sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
                 maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
             }).json({
                 token: token,
-                message: "Registration successful",
-                user: {
-                    id: customerDoc.id,
-                    username: customerDoc.username,
-                    name: customerDoc.name,
-                    email: customerDoc.email,
-                    points: customerDoc.points
-                }
+                message: "Registration successful"
             });
         });
 
     } catch (err: any) {
-        console.error('Registration error:', err);
         if (err.code === 11000) {
             // Check which field caused the duplicate error
             if (err.keyPattern?.username) {
@@ -274,7 +221,6 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
 
             jwt.sign(payload, secret, { expiresIn: "7d" }, (err, token) => {
                 if (err) {
-                    console.error('Token generation failed:', err);
                     res.status(500).json({ error: "Token generation failed" });
                     return;
                 }
@@ -282,25 +228,16 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
                 res.cookie("token", token, {
                     httpOnly: true,
                     secure: process.env.NODE_ENV === "production",
-                    sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
                     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
                 }).json({
                     token: token,
-                    message: "Login successful",
-                    user: {
-                        id: customerDoc.id,
-                        username: customerDoc.username,
-                        name: customerDoc.name,
-                        email: customerDoc.email,
-                        points: customerDoc.points
-                    }
+                    message: "Login successful"
                 });
             });
         } else {
             res.status(400).json({ error: "Wrong credentials" });
         }
     } catch (err: any) {
-        console.error('Login error:', err);
         res.status(500).json({ error: err.message || "Login failed" });
     }
 });
@@ -579,46 +516,30 @@ app.post("/logout", (req: Request, res: Response): void => {
     res.cookie("token", "", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
         maxAge: 0,
     }).json({ message: "Logged out successfully" });
 });
 
-// Enhanced profile endpoint with better error handling
+// Get customer profile endpoint
 app.get("/profile", async (req: Request, res: Response): Promise<void> => {
     try {
-        // Try to get token from cookies first, then from Authorization header
-        let token = req.cookies.token;
-        
-        if (!token) {
-            const authHeader = req.headers.authorization;
-            if (authHeader && authHeader.startsWith('Bearer ')) {
-                token = authHeader.substring(7);
-            }
-        }
+        const token = req.cookies.token;
 
         if (!token) {
-            console.log('[Profile] No token provided');
             res.status(401).json({ error: "Access token required" });
             return;
         }
 
         const decoded = jwt.verify(token, secret) as JWTPayload;
-        const customer = await Customer.findById(decoded.id).select('-password -resetPasswordToken -resetPasswordExpires');
+        const customer = await Customer.findById(decoded.id).select('-password');
 
         if (!customer) {
-            console.log('[Profile] Customer not found for token:', decoded.username);
             res.status(404).json({ error: "Customer not found" });
             return;
         }
 
-        console.log('[Profile] Successfully retrieved profile for:', customer.username);
-        res.json({
-            success: true,
-            data: customer
-        });
+        res.json(customer);
     } catch (err: any) {
-        console.log('[Profile] Token verification failed:', err.message);
         res.status(403).json({ error: "Invalid or expired token" });
     }
 });
@@ -754,8 +675,7 @@ app.post("/api/scan-qr", authenticateToken, async (req: Request, res: Response):
 });
 
 //##################################################################################################################
-// Fixed schemes endpoint with better image URL handling
-app.get('/api/schemes', optionalAuth, async (req: Request, res: Response): Promise<void> => {
+app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
     try {
         const page = parseInt(req.query.page as string) || 1;
         const limit = parseInt(req.query.limit as string) || 10;
@@ -770,49 +690,17 @@ app.get('/api/schemes', optionalAuth, async (req: Request, res: Response): Promi
             .skip(skip)
             .limit(limit);
 
-        // Get the base URL for images - with proper fallback handling
-        const getImageBaseUrl = () => {
-            // Priority order: ADMIN_BACKEND_URL, then construct from current request
-            if (process.env.ADMIN_BACKEND_URL) {
-                return process.env.ADMIN_BACKEND_URL;
-            }
-            
-            // Fallback: use current server URL
-            const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-            const host = req.headers.host || 'localhost:4000';
-            return `${protocol}://${host}`;
-        };
-
-        const imageBaseUrl = getImageBaseUrl();
-        console.log(`[Schemes] Using image base URL: ${imageBaseUrl}`);
-
-        // Transform the data to include properly constructed image URLs
-        const schemesWithImageUrls = schemes.map(scheme => {
-            const schemeObj = scheme.toObject();
-            
-            // Only add full URL if image path exists and doesn't already contain http
-            let imageUrl = null;
-            if (schemeObj.image) {
-                if (schemeObj.image.startsWith('http')) {
-                    // Already a full URL
-                    imageUrl = schemeObj.image;
-                } else {
-                    // Relative path - construct full URL
-                    const imagePath = schemeObj.image.startsWith('/') ? schemeObj.image : `/${schemeObj.image}`;
-                    imageUrl = `${imageBaseUrl}${imagePath}`;
-                }
-            }
-            
-            return {
-                ...schemeObj,
-                imageUrl: imageUrl, // New field with full URL
-                image: imageUrl,    // Keep compatibility with existing field
-            };
-        });
+        // Transform the data to include full image URLs pointing to admin backend
+        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL;
+        const schemesWithImageUrls = schemes.map(scheme => ({
+            ...scheme.toObject(),
+            // Convert relative path to full URL pointing to admin backend
+            images: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null,
+            // Keep original field name for compatibility
+            image: scheme.image ? `${ADMIN_BACKEND_URL}${scheme.image}` : null
+        }));
 
         const totalPages = Math.ceil(totalSchemes / limit);
-
-        console.log(`[Schemes] Returning ${schemesWithImageUrls.length} schemes`);
 
         res.status(200).json({
             success: true,
@@ -828,41 +716,6 @@ app.get('/api/schemes', optionalAuth, async (req: Request, res: Response): Promi
 
     } catch (error: any) {
         console.error('Error fetching schemes:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
-    }
-});
-
-//##################################################################################################################
-// Get customer points by username
-app.get('/api/customers/:username/points', async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { username } = req.params;
-
-        const customer = await Customer.findOne({ username }).select('username points name');
-
-        if (!customer) {
-            res.status(404).json({
-                success: false,
-                message: 'Customer not found'
-            });
-            return;
-        }
-
-        res.status(200).json({
-            success: true,
-            data: {
-                username: customer.username,
-                name: customer.name,
-                points: customer.points
-            }
-        });
-
-    } catch (error: any) {
-        console.error('Error fetching customer points:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
