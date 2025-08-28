@@ -691,7 +691,7 @@ app.get('/api/schemes', async (req: Request, res: Response): Promise<void> => {
             .limit(limit);
 
         // Transform the data to include full image URLs pointing to admin backend
-        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL || 'http://localhost:4001';
+        const ADMIN_BACKEND_URL = process.env.ADMIN_BACKEND_URL;
         const schemesWithImageUrls = schemes.map(scheme => ({
             ...scheme.toObject(),
             // Convert relative path to full URL pointing to admin backend
