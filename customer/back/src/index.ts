@@ -37,13 +37,6 @@ const secret = process.env.JWT_SECRET || "";
 
 // Enhanced Email transporter configuration with better error handling
 const createEmailTransporter = () => {
-    console.log('Creating email transporter with config:', {
-        host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.EMAIL_PORT || '587'),
-        user: process.env.EMAIL_USER ? '***configured***' : 'NOT_SET',
-        pass: process.env.EMAIL_PASSWORD ? '***configured***' : 'NOT_SET'
-    });
-
     return nodemailer.createTransport({
         host: process.env.EMAIL_HOST || 'smtp.gmail.com',
         port: parseInt(process.env.EMAIL_PORT || '587'),
@@ -101,8 +94,6 @@ interface JWTPayload {
 
 const authenticateToken = (req: Request, res: Response, next: any) => {
     let token;
-    console.log("Incoming headers:", req.headers);
-    console.log("Incoming cookies:", req.cookies);
 
     if (req.headers.authorization) {
         const authHeader = req.headers.authorization.replace(/\s+/g, ' ').trim();
@@ -122,8 +113,6 @@ const authenticateToken = (req: Request, res: Response, next: any) => {
         (req as any).user = decoded;
         next();
     } catch (err) {
-        console.log('Token verification error:', err);
-        console.log('Token received:', token);
         res.status(403).json({ error: "Invalid or expired token" });
     }
 };
@@ -287,7 +276,6 @@ app.post("/forgot-password", async (req: Request, res: Response): Promise<void> 
 
         // Check if email configuration is available
         if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-            console.error('Email configuration missing: EMAIL_USER or EMAIL_PASSWORD not set');
             res.status(500).json({
                 error: "Email service is not configured. Please contact support."
             });
@@ -368,8 +356,6 @@ app.post("/forgot-password", async (req: Request, res: Response): Promise<void> 
         `;
 
         try {
-            console.log(`Attempting to send password reset email to: ${email}`);
-
             const transporter = createEmailTransporter();
 
             const mailOptions = {
@@ -396,25 +382,13 @@ The OilPro Team
 
             const info = await transporter.sendMail(mailOptions);
 
-            console.log('✅ Password reset email sent successfully:', {
-                messageId: info.messageId,
-                to: email,
-                response: info.response
-            });
-
             res.status(200).json({
                 success: true,
                 message: "If an account with that email exists, we've sent a password reset link."
             });
 
         } catch (emailError: any) {
-            console.error('❌ Email sending failed:', {
-                error: emailError.message,
-                code: emailError.code,
-                command: emailError.command,
-                response: emailError.response,
-                responseCode: emailError.responseCode
-            });
+            console.error('Email sending failed:', emailError);
 
             // Clear the reset token if email fails
             customer.resetPasswordToken = undefined;
