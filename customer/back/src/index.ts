@@ -157,6 +157,20 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
+        // Check if email already exists
+        const existingEmail = await Customer.findOne({ email });
+        if (existingEmail) {
+            res.status(400).json({ error: "Email already exists" });
+            return;
+        }
+
+        // Check if username already exists
+        const existingUsername = await Customer.findOne({ username });
+        if (existingUsername) {
+            res.status(400).json({ error: "Username already exists" });
+            return;
+        }
+
         const customerDoc = await Customer.create({
             name,
             city,
