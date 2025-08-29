@@ -99,26 +99,22 @@ interface JWTPayload {
     id: string;
 }
 
-// Middleware to authenticate JWT token
 const authenticateToken = (req: Request, res: Response, next: any) => {
     let token;
-    
-    // Check Authorization header first
+    console.log("Incoming headers:", req.headers);
+    console.log("Incoming cookies:", req.cookies);
+
     if (req.headers.authorization) {
-        // Clean up the authorization header - remove extra spaces and line breaks
         const authHeader = req.headers.authorization.replace(/\s+/g, ' ').trim();
         if (authHeader.startsWith('Bearer ')) {
-            token = authHeader.substring(7).trim(); // Remove "Bearer " and trim any remaining spaces
+            token = authHeader.substring(7).trim();
         }
-    }
-    // Fallback to cookies
-    else if (req.cookies && req.cookies.token) {
-        token = req.cookies.token.trim(); // Also trim cookie token just in case
+    } else if (req.cookies?.token) {
+        token = req.cookies.token.trim();
     }
 
     if (!token) {
-        res.status(401).json({ error: "Access token required" });
-        return;
+        return res.status(401).json({ error: "Access token required" });
     }
 
     try {
@@ -131,6 +127,7 @@ const authenticateToken = (req: Request, res: Response, next: any) => {
         res.status(403).json({ error: "Invalid or expired token" });
     }
 };
+
 
 //##################################################################################################################
 // Register endpoint - Updated to include email
