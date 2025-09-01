@@ -507,8 +507,6 @@ function generateQRId(): string {
     return `QR${randomPart}`;
 }
 
-// Generate QR codes (both single and bulk)
-
 // Generate QR codes (both single and bulk) - UPDATED
 app.post('/api/generate-qr', async (req: Request, res: Response): Promise<void> => { 
     try {
