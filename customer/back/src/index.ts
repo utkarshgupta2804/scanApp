@@ -1,12 +1,9 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import mongoose, { Document, Schema } from "mongoose";
 import dotenv from "dotenv";
-import crypto from "crypto";
-import nodemailer from "nodemailer";
 import Customer from "./models/customer";
 import { QRBatch, IQRBatch } from "./models/qrs";
 import { Scheme } from "./models/scheme";
@@ -27,52 +24,12 @@ app.use('/uploads', express.static(path.resolve('uploads')));
 app.use(
     cors({
         credentials: true,
-        origin: process.env.CLIENT_URL ,
+        origin: process.env.CLIENT_URL,
     })
 );
 
 // Constants
-const salt = bcrypt.genSaltSync(10);
 const secret = process.env.JWT_SECRET || "";
-
-// Enhanced Email transporter configuration with better error handling
-const createEmailTransporter = () => {
-    return nodemailer.createTransport({
-        host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.EMAIL_PORT || '587'),
-        secure: process.env.EMAIL_PORT === '465', // true for 465, false for other ports
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASSWORD,
-        },
-        // Add these additional options for better reliability
-        tls: {
-            rejectUnauthorized: false // Allow self-signed certificates
-        },
-        debug: process.env.NODE_ENV !== 'production', // Enable debug in development
-        logger: process.env.NODE_ENV !== 'production' // Enable logging in development
-    });
-};
-
-// Test email configuration on startup
-const testEmailConfiguration = async () => {
-    try {
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-            console.warn('⚠️  EMAIL_USER or EMAIL_PASSWORD not configured. Email functionality will be disabled.');
-            return false;
-        }
-
-        const transporter = createEmailTransporter();
-
-        // Verify the connection configuration
-        await transporter.verify();
-        console.log('✅ Email server connection verified successfully');
-        return true;
-    } catch (error) {
-        console.error('❌ Email server verification failed:', error);
-        return false;
-    }
-};
 
 // Connect to MongoDB
 const connectDB = async (): Promise<void> => {
@@ -117,54 +74,77 @@ const authenticateToken = (req: Request, res: Response, next: any) => {
     }
 };
 
-
 //##################################################################################################################
-// Register endpoint - Updated to include email
+// Register endpoint - Updated to store plain text passwords
 app.post("/register", async (req: Request, res: Response): Promise<void> => {
-    const { name, city, username, email, password }: {
+    const { name, city, username, phone, email, password }: {
         name: string;
         city: string;
         username: string;
-        email: string;
+        phone: string;
+        email?: string;
         password: string;
     } = req.body;
 
     try {
         // Validate required fields
-        if (!name || !city || !username || !email || !password) {
-            res.status(400).json({ error: "All fields are required" });
+        if (!name || !city || !username || !phone || !password) {
+            res.status(400).json({ error: "Name, city, username, phone, and password are required" });
             return;
         }
 
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            res.status(400).json({ error: "Please enter a valid email address" });
+        // Validate phone number format (10 digits)
+        const phoneRegex = /^[0-9]{10}$/;
+        if (!phoneRegex.test(phone)) {
+            res.status(400).json({ error: "Please enter a valid 10-digit phone number" });
             return;
         }
 
-        // Check if email already exists
-        const existingEmail = await Customer.findOne({ email });
-        if (existingEmail) {
-            res.status(400).json({ error: "Email already exists" });
+        // Validate email format if provided
+        if (email) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                res.status(400).json({ error: "Please enter a valid email address" });
+                return;
+            }
+
+            // Check if email already exists (only if email is provided)
+            const existingEmail = await Customer.findOne({ email: email.toLowerCase() });
+            if (existingEmail) {
+                res.status(400).json({ error: "Email already exists" });
+                return;
+            }
+        }
+
+        // Check if phone already exists
+        const existingPhone = await Customer.findOne({ phone });
+        if (existingPhone) {
+            res.status(400).json({ error: "Phone number already exists" });
             return;
         }
 
         // Check if username already exists
-        const existingUsername = await Customer.findOne({ username });
+        const existingUsername = await Customer.findOne({ username: username.toLowerCase() });
         if (existingUsername) {
             res.status(400).json({ error: "Username already exists" });
             return;
         }
 
-        const customerDoc = await Customer.create({
-            name,
-            city,
-            username,
-            email,
-            password: bcrypt.hashSync(password, salt),
+        const customerData: any = {
+            name: name.trim(),
+            city: city.trim(),
+            username: username.toLowerCase().trim(),
+            phone: phone.trim(),
+            password: password.trim(), // Store password as plain text
             points: 0
-        });
+        };
+
+        // Add email only if provided
+        if (email) {
+            customerData.email = email.toLowerCase().trim();
+        }
+
+        const customerDoc = await Customer.create(customerData);
 
         // Generate JWT token for the newly registered customer
         const payload: JWTPayload = {
@@ -195,6 +175,8 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
                 res.status(400).json({ error: "Username already exists" });
             } else if (err.keyPattern?.email) {
                 res.status(400).json({ error: "Email already exists" });
+            } else if (err.keyPattern?.phone) {
+                res.status(400).json({ error: "Phone number already exists" });
             } else {
                 res.status(400).json({ error: "Duplicate entry found" });
             }
@@ -204,19 +186,30 @@ app.post("/register", async (req: Request, res: Response): Promise<void> => {
     }
 });
 
-// Login endpoint - Can now use email or username
+// Login endpoint - Can use email, username, or phone with plain text password comparison
 app.post("/login", async (req: Request, res: Response): Promise<void> => {
     try {
         const { identifier, password }: { identifier: string; password: string } = req.body;
 
         if (!identifier || !password) {
-            res.status(400).json({ error: "Email/username and password are required" });
+            res.status(400).json({ error: "Email/username/phone and password are required" });
             return;
         }
 
-        // Check if identifier is email or username
-        const isEmail = identifier.includes('@');
-        const query = isEmail ? { email: identifier.toLowerCase() } : { username: identifier.toLowerCase() };
+        // Determine the type of identifier and create appropriate query
+        let query: any;
+        const trimmedIdentifier = identifier.trim();
+
+        if (trimmedIdentifier.includes('@')) {
+            // It's an email
+            query = { email: trimmedIdentifier.toLowerCase() };
+        } else if (/^[0-9]{10}$/.test(trimmedIdentifier)) {
+            // It's a phone number
+            query = { phone: trimmedIdentifier };
+        } else {
+            // It's a username
+            query = { username: trimmedIdentifier.toLowerCase() };
+        }
 
         const customerDoc = await Customer.findOne(query);
 
@@ -225,7 +218,8 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        const passOk = bcrypt.compareSync(password, customerDoc.password);
+        // Compare passwords directly (plain text comparison)
+        const passOk = password.trim() === customerDoc.password;
 
         if (passOk) {
             // Customer logged in successfully
@@ -257,230 +251,16 @@ app.post("/login", async (req: Request, res: Response): Promise<void> => {
     }
 });
 
-// Enhanced Forgot Password endpoint with better error handling
-app.post("/forgot-password", async (req: Request, res: Response): Promise<void> => {
+// Update Profile endpoint
+app.put("/profile", authenticateToken, async (req: Request, res: Response): Promise<void> => {
     try {
-        const { email }: { email: string } = req.body;
-
-        if (!email) {
-            res.status(400).json({ error: "Email is required" });
-            return;
-        }
-
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            res.status(400).json({ error: "Please enter a valid email address" });
-            return;
-        }
-
-        // Check if email configuration is available
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-            res.status(500).json({
-                error: "Email service is not configured. Please contact support."
-            });
-            return;
-        }
-
-        const customer = await Customer.findOne({ email: email.toLowerCase() });
-
-        if (!customer) {
-            // Don't reveal if email exists or not for security
-            res.status(200).json({
-                message: "If an account with that email exists, we've sent a password reset link."
-            });
-            return;
-        }
-
-        // Generate reset token
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-
-        // Set token and expiry (1 hour)
-        customer.resetPasswordToken = resetTokenHash;
-        customer.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-        await customer.save();
-
-        // Create reset URL
-        const resetURL = `${process.env.CLIENT_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
-
-        // Email content with better styling
-        const emailContent = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Password Reset - OilPro</title>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                    .header { background-color: #FF6F00; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
-                    .content { background-color: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
-                    .button { display: inline-block; padding: 12px 24px; background-color: #FF6F00; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0; }
-                    .footer { text-align: center; margin-top: 20px; color: #666; font-size: 14px; }
-                    .warning { background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 10px; border-radius: 4px; margin: 15px 0; }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>🛢️ OilPro</h1>
-                        <h2>Password Reset Request</h2>
-                    </div>
-                    <div class="content">
-                        <p>Hello <strong>${customer.name}</strong>,</p>
-                        
-                        <p>We received a request to reset the password for your OilPro account associated with this email address.</p>
-                        
-                        <p>To reset your password, click the button below:</p>
-                        
-                        <div style="text-align: center;">
-                            <a href="${resetURL}" class="button">Reset My Password</a>
-                        </div>
-                        <div class="warning">
-                            <strong>⚠️ Important:</strong> This link will expire in 1 hour for security reasons.
-                        </div>
-                        
-                        <p>If you didn't request this password reset, please ignore this email. Your password will remain unchanged.</p>
-                        
-                        <p>For security reasons, this email was sent to ${email}.</p>
-                    </div>
-                    <div class="footer">
-                        <p>Best regards,<br><strong>The OilPro Team</strong></p>
-                        <p><small>This is an automated email. Please do not reply to this message.</small></p>
-                    </div>
-                </div>
-            </body>
-            </html>
-        `;
-
-        try {
-            const transporter = createEmailTransporter();
-
-            const mailOptions = {
-                from: `"OilPro Support" <${process.env.EMAIL_USER}>`,
-                to: email,
-                subject: '🔐 Password Reset Request - OilPro',
-                html: emailContent,
-                // Add text version as fallback
-                text: `
-Hello ${customer.name},
-
-We received a request to reset your password for your OilPro account.
-
-Click this link to reset your password: ${resetURL}
-
-This link will expire in 1 hour.
-
-If you didn't request this, please ignore this email.
-
-Best regards,
-The OilPro Team
-                `.trim()
-            };
-
-            const info = await transporter.sendMail(mailOptions);
-
-            res.status(200).json({
-                success: true,
-                message: "If an account with that email exists, we've sent a password reset link."
-            });
-
-        } catch (emailError: any) {
-            console.error('Email sending failed:', emailError);
-
-            // Clear the reset token if email fails
-            customer.resetPasswordToken = undefined;
-            customer.resetPasswordExpires = undefined;
-            await customer.save();
-
-            // Provide more specific error messages based on the error type
-            let errorMessage = "Failed to send reset email. Please try again later.";
-
-            if (emailError.code === 'EAUTH') {
-                errorMessage = "Email authentication failed. Please contact support.";
-            } else if (emailError.code === 'ECONNECTION') {
-                errorMessage = "Email server connection failed. Please try again later.";
-            } else if (emailError.responseCode === 550) {
-                errorMessage = "Invalid email address. Please check and try again.";
-            }
-
-            res.status(500).json({
-                error: errorMessage,
-                details: process.env.NODE_ENV === 'development' ? emailError.message : undefined
-            });
-        }
-
-    } catch (err: any) {
-        console.error('Forgot password endpoint error:', err);
-        res.status(500).json({ error: "Internal server error" });
-    }
-});
-
-// Reset Password endpoint
-app.post("/reset-password/:token", async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { token } = req.params;
-        const { password }: { password: string } = req.body;
-
-        if (!password) {
-            res.status(400).json({ error: "Password is required" });
-            return;
-        }
-
-        if (password.length < 6) {
-            res.status(400).json({ error: "Password must be at least 6 characters long" });
-            return;
-        }
-
-        // Hash the token to compare with stored hash
-        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
-
-        const customer = await Customer.findOne({
-            resetPasswordToken: hashedToken,
-            resetPasswordExpires: { $gt: new Date() }
-        });
-
-        if (!customer) {
-            res.status(400).json({ error: "Invalid or expired reset token" });
-            return;
-        }
-
-        // Update password
-        customer.password = bcrypt.hashSync(password, salt);
-        customer.resetPasswordToken = undefined;
-        customer.resetPasswordExpires = undefined;
-        await customer.save();
-
-        res.status(200).json({
-            message: "Password reset successful. You can now login with your new password."
-        });
-
-    } catch (err: any) {
-        console.error('Reset password error:', err);
-        res.status(500).json({ error: "Internal server error" });
-    }
-});
-
-// Change Password endpoint (for logged-in users)
-app.post("/change-password", authenticateToken, async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { currentPassword, newPassword }: {
-            currentPassword: string;
-            newPassword: string;
-        } = req.body;
         const user = (req as any).user;
-
-        if (!currentPassword || !newPassword) {
-            res.status(400).json({ error: "Current password and new password are required" });
-            return;
-        }
-
-        if (newPassword.length < 6) {
-            res.status(400).json({ error: "New password must be at least 6 characters long" });
-            return;
-        }
+        const { name, city, email, phone }: {
+            name?: string;
+            city?: string;
+            email?: string;
+            phone?: string;
+        } = req.body;
 
         const customer = await Customer.findById(user.id);
 
@@ -489,25 +269,100 @@ app.post("/change-password", authenticateToken, async (req: Request, res: Respon
             return;
         }
 
-        // Verify current password
-        const isCurrentPasswordValid = bcrypt.compareSync(currentPassword, customer.password);
-
-        if (!isCurrentPasswordValid) {
-            res.status(400).json({ error: "Current password is incorrect" });
-            return;
+        // Validate and update fields if provided
+        if (name !== undefined) {
+            if (!name.trim()) {
+                res.status(400).json({ error: "Name cannot be empty" });
+                return;
+            }
+            customer.name = name.trim();
         }
 
-        // Update password
-        customer.password = bcrypt.hashSync(newPassword, salt);
+        if (city !== undefined) {
+            if (!city.trim()) {
+                res.status(400).json({ error: "City cannot be empty" });
+                return;
+            }
+            customer.city = city.trim();
+        }
+
+        if (email !== undefined) {
+            if (email.trim() === "") {
+                // Allow removing email
+                customer.email = undefined;
+            } else {
+                // Validate email format
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(email)) {
+                    res.status(400).json({ error: "Please enter a valid email address" });
+                    return;
+                }
+
+                // Check if email already exists for another user
+                const existingEmail = await Customer.findOne({ 
+                    email: email.toLowerCase(),
+                    _id: { $ne: user.id }
+                });
+                
+                if (existingEmail) {
+                    res.status(400).json({ error: "Email already exists" });
+                    return;
+                }
+
+                customer.email = email.toLowerCase().trim();
+            }
+        }
+
+        if (phone !== undefined) {
+            if (!phone.trim()) {
+                res.status(400).json({ error: "Phone number is required" });
+                return;
+            }
+
+            // Validate phone number format
+            const phoneRegex = /^[0-9]{10}$/;
+            if (!phoneRegex.test(phone)) {
+                res.status(400).json({ error: "Please enter a valid 10-digit phone number" });
+                return;
+            }
+
+            // Check if phone already exists for another user
+            const existingPhone = await Customer.findOne({ 
+                phone: phone.trim(),
+                _id: { $ne: user.id }
+            });
+            
+            if (existingPhone) {
+                res.status(400).json({ error: "Phone number already exists" });
+                return;
+            }
+
+            customer.phone = phone.trim();
+        }
+
         await customer.save();
 
+        // Return updated customer data (without password)
+        const updatedCustomer = await Customer.findById(user.id).select('-password');
+        
         res.status(200).json({
-            message: "Password changed successfully"
+            message: "Profile updated successfully",
+            customer: updatedCustomer
         });
 
     } catch (err: any) {
-        console.error('Change password error:', err);
-        res.status(500).json({ error: "Internal server error" });
+        console.error('Update profile error:', err);
+        if (err.code === 11000) {
+            if (err.keyPattern?.email) {
+                res.status(400).json({ error: "Email already exists" });
+            } else if (err.keyPattern?.phone) {
+                res.status(400).json({ error: "Phone number already exists" });
+            } else {
+                res.status(400).json({ error: "Duplicate entry found" });
+            }
+        } else {
+            res.status(500).json({ error: "Internal server error" });
+        }
     }
 });
 
@@ -520,6 +375,7 @@ app.post("/logout", (req: Request, res: Response): void => {
     }).json({ message: "Logged out successfully" });
 });
 
+// Get Profile endpoint
 app.get("/profile", authenticateToken, async (req: Request, res: Response): Promise<void> => {
     try {
         const user = (req as any).user; // decoded JWT already set in middleware
@@ -536,7 +392,6 @@ app.get("/profile", authenticateToken, async (req: Request, res: Response): Prom
         res.status(500).json({ error: "Internal server error" });
     }
 });
-
 
 //##################################################################################################################
 // QR Code Scanning and Points System
@@ -851,13 +706,8 @@ const PORT = process.env.PORT || 4000;
 
 const startServer = async (): Promise<void> => {
     await connectDB();
-
-    // Test email configuration on startup
-    await testEmailConfiguration();
-
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
-        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
 };
 

@@ -5,7 +5,8 @@ export interface ICustomer extends Document {
     name: string;
     city: string;
     username: string;
-    email: string;
+    phone: string;
+    email?: string;  // optional
     password: string;
     points: number;
     resetPasswordToken?: string;
@@ -33,10 +34,21 @@ const CustomerSchema: Schema<ICustomer> = new Schema({
         trim: true,
         lowercase: true
     },
-    email: {
+    phone: {
         type: String,
         required: true,
         unique: true,
+        trim: true,
+        match: [
+            /^[0-9]{10}$/, // simple regex for 10-digit numbers, tweak if needed
+            'Please enter a valid phone number'
+        ]
+    },
+    email: {
+        type: String,
+        required: false,   // ✅ email now optional
+        unique: true,
+        sparse: true,      // ✅ avoids index conflict when many docs have no email
         trim: true,
         lowercase: true,
         match: [
